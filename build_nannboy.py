@@ -6,7 +6,7 @@ import sys
 BUILD_DIR = "build"
 OUTPUT_FILENAME = "NannBoy_mGBA.html"
 
-print("--- Nann Boy Builder (Bulletproof Edition) ---")
+print("--- Nann Boy Builder (Engine Injection Only) ---")
 
 # 1. FIND FILES
 def find_file(name):
@@ -28,18 +28,18 @@ with open(html_path, "r", encoding="utf-8") as f: original_html = f.read()
 with open(js_path, "r", encoding="utf-8") as f: js_content = f.read()
 with open(wasm_path, "rb") as f: wasm_bytes = f.read()
 
-# Encode WASM as Base64 string for embedding
 wasm_b64 = base64.b64encode(wasm_bytes).decode("utf-8")
 
-# 3. INJECTION SCRIPT
+# 3. INJECTION SCRIPT (Pure Engine - No UI Logic)
 injection_script = f"""
 <script>
     /**
-     * Nann Boy Core (Bulletproof)
+     * Nann Boy Engine Core
+     * Injected by build_nannboy.py
      */
-    
-    // 1. Prepare WASM Binary (Prevents fetch errors)
     const WASM_DATA = "{wasm_b64}";
+    
+    // Helper to turn Base64 back into binary for the emulator
     function getWasmBinary() {{
         const raw = atob(WASM_DATA);
         const len = raw.length;
@@ -48,100 +48,38 @@ injection_script = f"""
         return bytes;
     }}
 
-    // 2. Define Module
     var Module = {{
         canvas: document.getElementById('rom-canvas'),
-        wasmBinary: getWasmBinary(), // Direct feed! No fetch needed.
+        wasmBinary: getWasmBinary(),
         print: (t) => console.log(t),
         printErr: (t) => console.error(t)
     }};
 
-    // 3. Input Handling
-    const KEYS = {{ 'Up':38, 'Down':40, 'Left':37, 'Right':39, 'A':88, 'B':90, 'Start':13, 'Select':8 }};
-    const sendKey = (k, down) => window.dispatchEvent(new KeyboardEvent(down?'keydown':'keyup', {{keyCode: KEYS[k]}}));
-
-    document.querySelectorAll('[data-label]').forEach(btn => {{
-        const k = btn.getAttribute('data-label');
-        const press = (d) => {{ 
-            d ? btn.classList.add('pressed') : btn.classList.remove('pressed'); 
-            sendKey(k, d); 
-        }};
-        btn.onmousedown = btn.ontouchstart = (e) => {{ e.preventDefault(); press(true); }};
-        btn.onmouseup = btn.ontouchend = (e) => {{ e.preventDefault(); press(false); }};
+    // PRE-LOAD ENGINE IMMEDIATELY
+    // This ensures the emulator is ready before you even click 'Load'
+    window.addEventListener('DOMContentLoaded', async () => {{
+        try {{
+            window.Emulator = await mGBA(Module);
+            console.log("✅ Engine Pre-Loaded Successfully");
+        }} catch(e) {{
+            console.error("Engine Init Failed", e);
+        }}
     }});
 
-    // 4. ROM Loader (Async to prevent freezing)
-    const loadBtn = document.getElementById('btn-load-rom-action');
-    const realInput = document.getElementById('file-input-rom');
-    const overlay = document.getElementById('loading-overlay');
-    const status = document.getElementById('status-log');
-    
-    // hijack click
-    if(loadBtn) {{
-        const newBtn = loadBtn.cloneNode(true);
-        loadBtn.parentNode.replaceChild(newBtn, loadBtn);
-        newBtn.onclick = () => realInput.click();
-    }}
-
-    if(realInput) {{
-        const newInput = realInput.cloneNode(true);
-        realInput.parentNode.replaceChild(newInput, realInput);
-        
-        newInput.onchange = async (e) => {{
-            const file = e.target.files[0];
-            if(!file) return;
-
-            // SHOW LOADING SCREEN FIRST
-            document.querySelectorAll('.menu-ui').forEach(x => x.style.display='none');
-            overlay.style.display = 'flex';
-            status.innerText = "Processing file...";
+    // EXPOSE FUNCTION FOR UI TO CALL
+    // Your index.html calls this function when a file is uploaded
+    window.startMgbaGame = async function(romData, romName) {{
+        try {{
+            if (!window.Emulator) window.Emulator = await mGBA(Module);
             
-            // YIELD TO BROWSER (CRITICAL FIX)
-            await new Promise(r => setTimeout(r, 100));
-
-            try {{
-                let data = null;
-                let name = file.name;
-
-                if(name.toLowerCase().endsWith('.zip')) {{
-                    status.innerText = "Unzipping...";
-                    await new Promise(r => setTimeout(r, 50)); // Yield again
-                    
-                    const buffer = await file.arrayBuffer();
-                    const zip = await JSZip.loadAsync(buffer);
-                    const romFile = Object.values(zip.files).find(f => !f.dir && f.name.match(/\.(gba|gbc|gb)$/i));
-                    
-                    if(!romFile) throw new Error("No ROM found in ZIP");
-                    name = romFile.name;
-                    data = await romFile.async("uint8array");
-                }} else {{
-                    const buffer = await file.arrayBuffer();
-                    data = new Uint8Array(buffer);
-                }}
-
-                status.innerText = "Starting Engine...";
-                await new Promise(r => setTimeout(r, 50)); // Yield again
-
-                // INIT ENGINE ONLY NOW
-                if(!window.Emulator) {{
-                    window.Emulator = await mGBA(Module);
-                }}
-                
-                window.Emulator.FS.writeFile(name, data);
-                window.Emulator.cwrap('loadGame', 'number', ['string'])(name);
-                
-                overlay.style.display = 'none';
-                document.getElementById('start-screen').style.display = 'none';
-                document.getElementById('rom-canvas').style.display = 'block';
-
-            }} catch(err) {{
-                console.error(err);
-                status.innerText = "ERROR:\\n" + err.message;
-                status.style.color = "red";
-            }}
-        }};
-    }}
-
+            window.Emulator.FS.writeFile(romName, romData);
+            window.Emulator.cwrap('loadGame', 'number', ['string'])(romName);
+            return true;
+        }} catch(e) {{
+            console.error(e);
+            return false;
+        }}
+    }};
 </script>
 <script>
 {js_content}
@@ -149,7 +87,10 @@ injection_script = f"""
 """
 
 # 4. WRITE OUTPUT
-final_html = original_html.replace("</body>", f"{injection_script}</body>") if "</body>" in original_html else original_html + injection_script
+if "</body>" in original_html:
+    final_html = original_html.replace("</body>", f"{injection_script}</body>")
+else:
+    final_html = original_html + injection_script
 
 with open(OUTPUT_FILENAME, "w", encoding="utf-8") as f:
     f.write(final_html)
