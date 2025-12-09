@@ -6,7 +6,7 @@ import sys
 BUILD_DIR = "build"
 OUTPUT_FILENAME = "NannBoy_mGBA.html"
 
-print("--- Nann Boy Builder (Engine Injection Only) ---")
+print("--- Nann Boy Builder (Final Engine Injection) ---")
 
 # 1. FIND FILES
 def find_file(name):
