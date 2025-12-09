@@ -6,7 +6,7 @@ import sys
 BUILD_DIR = "build"
 OUTPUT_FILENAME = "NannBoy_mGBA.html"
 
-print("--- Nann Boy Builder (Fixed Inputs) ---")
+print("--- Nann Boy Builder (Pre-Loader + Auto-Unzip) ---")
 
 def find_file_recursive(target_name):
     if os.path.exists(target_name): return target_name
@@ -50,7 +50,7 @@ original_html = read_file(html_path)
 injection_script = f"""
 <script>
     /**
-     * Nann Boy mGBA Integration (Fixed Input Logic)
+     * Nann Boy mGBA Integration (Final)
      */
     const WASM_B64 = "{wasm_b64}";
     
@@ -87,11 +87,13 @@ injection_script = f"""
         window.dispatchEvent(new KeyboardEvent(isDown?'keydown':'keyup', {{ keyCode:code, which:code, bubbles:true }}));
     }}
 
-    document.addEventListener('DOMContentLoaded', () => {{
+    // --- MAIN INITIALIZATION ---
+    document.addEventListener('DOMContentLoaded', async () => {{
         const canvasEl = document.getElementById('rom-canvas');
-        if(canvasEl) Module.canvas = canvasEl;
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const loadingText = document.getElementById('loading-text');
 
-        // Controls
+        // 1. INPUT LISTENERS
         document.querySelectorAll('.dpad-btn, .btn-round, .btn-pill').forEach(btn => {{
             const label = btn.getAttribute('data-label');
             const handler = (e, isDown) => {{
@@ -105,35 +107,53 @@ injection_script = f"""
             btn.addEventListener('touchend', (e) => handler(e, false));
         }});
 
-        // --- FILE LOADING LOGIC (FIXED) ---
+        // 2. PRE-LOAD ENGINE
+        if(loadingOverlay) {{
+             loadingOverlay.style.display = 'flex';
+             if(loadingText) loadingText.innerText = "Booting Engine...";
+        }}
+
+        try {{
+            if(typeof mGBA === 'undefined') throw new Error("mGBA function missing. Check mgba.js");
+            
+            // This wakes up the emulator immediately
+            window.Emulator = await mGBA(Module);
+            
+            console.log("✅ Engine Ready");
+            if(loadingText) loadingText.innerText = "System Ready";
+            if(loadingOverlay) setTimeout(() => loadingOverlay.style.display = 'none', 800);
+
+        }} catch(e) {{
+            console.error("Engine Init Failed:", e);
+            if(loadingText) loadingText.innerHTML = "Engine Error:<br>" + e.message;
+            return;
+        }}
+
+        // 3. FILE LOADING LOGIC
         const oldInput = document.getElementById('file-input-rom');
         const oldBtn = document.getElementById('btn-load-rom-action');
-        const loadingOverlay = document.getElementById('loading-overlay');
         const startScreen = document.getElementById('start-screen');
         const powerLed = document.getElementById('power-led');
 
         if(oldInput && oldBtn) {{
-            // 1. Create NEW elements to strip old listeners
             const newInput = oldInput.cloneNode(true);
             const newBtn = oldBtn.cloneNode(true);
 
-            // 2. Attach Listener to NEW Input
             newInput.addEventListener('change', async (e) => {{
                 const file = e.target.files[0];
                 if (!file) return;
 
-                // UI Updates
                 document.querySelectorAll('.menu-ui').forEach(el => el.style.display = 'none');
                 if(loadingOverlay) {{
                     loadingOverlay.style.display = 'flex';
-                    loadingOverlay.innerHTML = '<span class="text-white">Processing...</span>';
+                    if(loadingText) loadingText.innerText = "Loading Cartridge...";
                 }}
 
                 try {{
                     let fileData = null;
                     let filename = file.name;
 
-                    // ZIP Handling
+                    // AUTO-UNZIP
                     if (file.name.toLowerCase().endsWith('.zip')) {{
                         if(!window.JSZip) throw new Error("JSZip library not loaded");
                         
@@ -150,20 +170,15 @@ injection_script = f"""
                             }}
                         }});
 
-                        if(!targetFile) throw new Error("No .gb/.gbc/.gba found in ZIP");
+                        if(!targetFile) throw new Error("No valid ROM found in ZIP");
                         filename = targetFile.name;
                         fileData = await targetFile.async("uint8array");
                     }} else {{
-                        // Standard Load
                         const buffer = await file.arrayBuffer();
                         fileData = new Uint8Array(buffer);
                     }}
 
-                    // Initialize Engine
-                    if (!window.mGBA) throw new Error("mGBA Engine not found");
-                    if (!window.Emulator) window.Emulator = await mGBA(Module);
-
-                    // Write & Run
+                    // RUN GAME
                     window.Emulator.FS.writeFile(filename, fileData);
                     const runGame = window.Emulator.cwrap('loadGame', 'number', ['string']);
                     
@@ -183,14 +198,9 @@ injection_script = f"""
                 }}
             }});
 
-            // 3. Connect Button to NEW Input
             newBtn.addEventListener('click', () => newInput.click());
-
-            // 4. Swap them in the DOM
             oldInput.parentNode.replaceChild(newInput, oldInput);
             oldBtn.parentNode.replaceChild(newBtn, oldBtn);
-            
-            console.log("File Loader Injected Successfully");
         }}
     }});
 </script>
