@@ -225,6 +225,30 @@ injection_script = f"""
         }}
         document.querySelectorAll('.theme-option').forEach(o => o.addEventListener('click', () => applyTheme(o.getAttribute('data-theme'))));
 
+        // -- RESTORED MISSING FUNCTION --
+        window.handleHtmlUpload = function(event) {{
+            const file = event.target.files[0]; 
+            if (!file) return;
+
+             const iframe = document.getElementById('game-iframe');
+             const romCanvas = document.getElementById('rom-canvas');
+             const powerLed = document.getElementById('power-led');
+             const startScreen = document.getElementById('start-screen');
+             powerLed.classList.remove('on'); 
+
+            if (file.type !== 'text/html' && !file.name.endsWith('.html')) {{ return; }}
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {{
+                 let htmlContent = e.target.result;
+                 // Inject fit style
+                const fitStyle = `<style>html,body{{margin:0;padding:0;width:100vw;height:100vh;overflow:hidden;background:transparent;display:flex;justify-content:center;align-items:center;}}canvas{{max-width:100%;max-height:100%;object-fit:contain !important;transform:translateZ(0);will-change:transform;}}</style>`;
+                htmlContent = htmlContent.replace('<head>', '<head>' + fitStyle);
+                try {{ const blob = new Blob([htmlContent], {{ type: 'text/html' }}); const blobUrl = URL.createObjectURL(blob); iframe.onload = () => {{ URL.revokeObjectURL(blobUrl); toggleMenu('main-menu'); iframe.onload = null; iframe.style.display = 'block'; romCanvas.style.display = 'none'; startScreen.style.display = 'none'; iframe.contentWindow.focus(); powerLed.classList.add('on'); }}; iframe.src = blobUrl; }} catch (error) {{ }}
+            }};
+            reader.readAsText(file);
+        }}
+
     }});
 </script>
 
