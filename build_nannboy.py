@@ -6,9 +6,8 @@ import sys
 BUILD_DIR = "build"
 OUTPUT_FILENAME = "NannBoy_mGBA.html"
 
-print("--- Nann Boy Builder (Anti-Freeze Edition) ---")
+print("--- Nann Boy Builder (Ultra-Smooth Edition) ---")
 
-# 1. FIND FILES
 def find_file(name):
     if os.path.exists(name): return name
     if os.path.exists(os.path.join(BUILD_DIR, name)): return os.path.join(BUILD_DIR, name)
@@ -19,92 +18,100 @@ js_path = find_file("mgba.js")
 wasm_path = find_file("mgba.wasm")
 
 if not (html_path and js_path and wasm_path):
-    print("❌ ERROR: Files missing. Check 'build' folder.")
+    print("❌ ERROR: Missing files. Check 'build' folder.")
     sys.exit(1)
 
-# 2. READ & ENCODE
-print("Reading files...")
+# READ
+print("Reading resources...")
 with open(html_path, "r", encoding="utf-8") as f: original_html = f.read()
 with open(js_path, "r", encoding="utf-8") as f: js_content = f.read()
 with open(wasm_path, "rb") as f: wasm_bytes = f.read()
 
-wasm_b64 = base64.b64encode(wasm_bytes).decode("utf-8")
+# CHUNK WASM (For Progressive Loading)
+print("Chunking Engine...")
+raw_b64 = base64.b64encode(wasm_bytes).decode("utf-8")
+CHUNK_SIZE = 256 * 1024 # 256KB chunks
+chunks = [raw_b64[i:i+CHUNK_SIZE] for i in range(0, len(raw_b64), CHUNK_SIZE)]
+js_chunks = "['" + "','".join(chunks) + "']"
 
-# 3. INJECTION SCRIPT (Pure Engine - No UI Logic)
+# PROGRESSIVE LOADER SCRIPT
 injection_script = f"""
 <script>
     /**
-     * Nann Boy Engine Core (Anti-Freeze)
+     * Nann Boy Core (Progressive Loader)
+     * Decodes engine in background ticks to prevent freezing.
      */
-    const WASM_DATA = "{wasm_b64}";
     
-    function getWasmBinary() {{
+    const ENGINE_CHUNKS = {js_chunks};
+    const TOTAL_SIZE = {len(wasm_bytes)};
+    let wasmBinary = null;
+
+    // 1. ASYNC DECODER
+    async function loadEngine() {{
+        const overlay = document.getElementById('loading-overlay');
+        const bar = document.getElementById('loader-bar-fill');
+        const txt = document.getElementById('loading-text');
+        
+        if(overlay) overlay.style.display = 'flex';
+        
+        // Allocate Memory
+        const binary = new Uint8Array(TOTAL_SIZE);
+        let offset = 0;
+        
+        // Process Chunks with Yielding
+        for(let i=0; i<ENGINE_CHUNKS.length; i++) {{
+            const chunk = ENGINE_CHUNKS[i];
+            const raw = atob(chunk);
+            for(let k=0; k<raw.length; k++) {{
+                binary[offset++] = raw.charCodeAt(k);
+            }}
+            
+            // Visual Feedback
+            if(bar) bar.style.width = Math.round((i / ENGINE_CHUNKS.length) * 100) + "%";
+            if(txt) txt.innerText = "System Boot: " + Math.round((i / ENGINE_CHUNKS.length) * 100) + "%";
+            
+            // Yield to Main Thread (Smoothness Secret)
+            await new Promise(r => setTimeout(r, 0));
+        }}
+        
+        wasmBinary = binary;
+        if(txt) txt.innerText = "Engine Ready";
+        if(overlay) setTimeout(() => overlay.style.display = 'none', 500);
+        
+        // Pre-init mGBA
         try {{
-            const raw = atob(WASM_DATA);
-            const len = raw.length;
-            const bytes = new Uint8Array(len);
-            for(let i=0; i<len; i++) bytes[i] = raw.charCodeAt(i);
-            return bytes;
+            window.Emulator = await mGBA({{
+                canvas: document.getElementById('rom-canvas'),
+                wasmBinary: binary,
+                noInitialRun: true
+            }});
+            console.log("✅ Engine Hot");
         }} catch(e) {{
-            console.error("WASM Decode Failed", e);
-            return null;
+            console.error("Engine Warmup Failed", e);
         }}
     }}
 
-    // ENGINE CONFIGURATION
-    var Module = {{
-        canvas: document.getElementById('rom-canvas'),
-        wasmBinary: getWasmBinary(),
-        noInitialRun: true, // <--- CRITICAL FIX: Stops auto-run freeze
-        print: (t) => console.log(t),
-        printErr: (t) => console.error(t),
-        onRuntimeInitialized: function() {{
-            console.log("✅ WASM Runtime Initialized");
-        }}
-    }};
+    // Boot on Load
+    window.addEventListener('DOMContentLoaded', loadEngine);
 
-    // STARTUP
-    window.addEventListener('DOMContentLoaded', async () => {{
-        try {{
-            if(typeof mGBA !== 'function') throw new Error("mgba.js content missing or invalid");
-            
-            // Initialize the factory, but due to noInitialRun it won't start the game loop yet
-            window.Emulator = await mGBA(Module);
-            console.log("✅ Engine Ready for Command");
-            
-        }} catch(e) {{
-            console.error("Engine Init Failed:", e);
-            alert("Engine Error: " + e.message);
-        }}
-    }});
-
-    // GAME LAUNCHER (Called by index.html)
+    // 2. RUN GAME EXPORT
     window.startMgbaGame = async function(romData, romName) {{
+        if(!window.Emulator) {{
+            // Just in case it wasn't ready
+            if(!wasmBinary) return false;
+            window.Emulator = await mGBA({{
+                canvas: document.getElementById('rom-canvas'),
+                wasmBinary: wasmBinary,
+                noInitialRun: true
+            }});
+        }}
+        
         try {{
-            if (!window.Emulator) {{
-                console.log("Waiting for engine...");
-                window.Emulator = await mGBA(Module);
-            }}
-            
-            // 1. Write file to virtual memory
             window.Emulator.FS.writeFile(romName, romData);
-            
-            // 2. Call the main function with the filename
-            console.log("Booting: " + romName);
-            
-            // Depending on the version of mgba.js, one of these will start the loop
-            try {{
-                window.Emulator.callMain([romName]); 
-            }} catch(e) {{
-                // Fallback if callMain isn't exposed directly
-                console.warn("callMain failed, trying cwrap...", e);
-                window.Emulator.cwrap('loadGame', 'number', ['string'])(romName);
-            }}
-            
+            window.Emulator.cwrap('loadGame', 'number', ['string'])(romName);
             return true;
         }} catch(e) {{
-            console.error("Start Game Error:", e);
-            alert("Failed to start: " + e.message);
+            console.error(e);
             return false;
         }}
     }};
@@ -114,11 +121,8 @@ injection_script = f"""
 </script>
 """
 
-# 4. WRITE OUTPUT
-if "</body>" in original_html:
-    final_html = original_html.replace("</body>", f"{injection_script}</body>")
-else:
-    final_html = original_html + injection_script
+# WRITE
+final_html = original_html.replace("</body>", f"{injection_script}</body>") if "</body>" in original_html else original_html + injection_script
 
 with open(OUTPUT_FILENAME, "w", encoding="utf-8") as f:
     f.write(final_html)
