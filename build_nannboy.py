@@ -6,7 +6,7 @@ import sys
 BUILD_DIR = "build"
 OUTPUT_FILENAME = "NannBoy_mGBA.html"
 
-print("--- Nann Boy Builder (Final Engine Injection) ---")
+print("--- Nann Boy Builder (Anti-Freeze Edition) ---")
 
 # 1. FIND FILES
 def find_file(name):
@@ -34,49 +34,77 @@ wasm_b64 = base64.b64encode(wasm_bytes).decode("utf-8")
 injection_script = f"""
 <script>
     /**
-     * Nann Boy Engine Core
-     * Injected by build_nannboy.py
+     * Nann Boy Engine Core (Anti-Freeze)
      */
     const WASM_DATA = "{wasm_b64}";
     
-    // Helper to turn Base64 back into binary for the emulator
     function getWasmBinary() {{
-        const raw = atob(WASM_DATA);
-        const len = raw.length;
-        const bytes = new Uint8Array(len);
-        for(let i=0; i<len; i++) bytes[i] = raw.charCodeAt(i);
-        return bytes;
+        try {{
+            const raw = atob(WASM_DATA);
+            const len = raw.length;
+            const bytes = new Uint8Array(len);
+            for(let i=0; i<len; i++) bytes[i] = raw.charCodeAt(i);
+            return bytes;
+        }} catch(e) {{
+            console.error("WASM Decode Failed", e);
+            return null;
+        }}
     }}
 
+    // ENGINE CONFIGURATION
     var Module = {{
         canvas: document.getElementById('rom-canvas'),
         wasmBinary: getWasmBinary(),
+        noInitialRun: true, // <--- CRITICAL FIX: Stops auto-run freeze
         print: (t) => console.log(t),
-        printErr: (t) => console.error(t)
+        printErr: (t) => console.error(t),
+        onRuntimeInitialized: function() {{
+            console.log("✅ WASM Runtime Initialized");
+        }}
     }};
 
-    // PRE-LOAD ENGINE IMMEDIATELY
-    // This ensures the emulator is ready before you even click 'Load'
+    // STARTUP
     window.addEventListener('DOMContentLoaded', async () => {{
         try {{
+            if(typeof mGBA !== 'function') throw new Error("mgba.js content missing or invalid");
+            
+            // Initialize the factory, but due to noInitialRun it won't start the game loop yet
             window.Emulator = await mGBA(Module);
-            console.log("✅ Engine Pre-Loaded Successfully");
+            console.log("✅ Engine Ready for Command");
+            
         }} catch(e) {{
-            console.error("Engine Init Failed", e);
+            console.error("Engine Init Failed:", e);
+            alert("Engine Error: " + e.message);
         }}
     }});
 
-    // EXPOSE FUNCTION FOR UI TO CALL
-    // Your index.html calls this function when a file is uploaded
+    // GAME LAUNCHER (Called by index.html)
     window.startMgbaGame = async function(romData, romName) {{
         try {{
-            if (!window.Emulator) window.Emulator = await mGBA(Module);
+            if (!window.Emulator) {{
+                console.log("Waiting for engine...");
+                window.Emulator = await mGBA(Module);
+            }}
             
+            // 1. Write file to virtual memory
             window.Emulator.FS.writeFile(romName, romData);
-            window.Emulator.cwrap('loadGame', 'number', ['string'])(romName);
+            
+            // 2. Call the main function with the filename
+            console.log("Booting: " + romName);
+            
+            // Depending on the version of mgba.js, one of these will start the loop
+            try {{
+                window.Emulator.callMain([romName]); 
+            }} catch(e) {{
+                // Fallback if callMain isn't exposed directly
+                console.warn("callMain failed, trying cwrap...", e);
+                window.Emulator.cwrap('loadGame', 'number', ['string'])(romName);
+            }}
+            
             return true;
         }} catch(e) {{
-            console.error(e);
+            console.error("Start Game Error:", e);
+            alert("Failed to start: " + e.message);
             return false;
         }}
     }};
